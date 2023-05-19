@@ -1,0 +1,79 @@
+#include <stdio.h>
+
+#define M 32
+#define N 32
+#define K 32
+#define TILE_SIZE 8
+
+__global__ void matrixMultiplication(int* matrixA, int* matrixB, int* matrixC, int m, int n, int k) {
+    __shared__ int sharedMatrixA[TILE_SIZE][TILE_SIZE];
+    __shared__ int sharedMatrixB[TILE_SIZE][TILE_SIZE];
+
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int sum = 0;
+    for (int t = 0; t < (k + TILE_SIZE - 1) / TILE_SIZE; ++t) {
+        if (row < m && t * TILE_SIZE + threadIdx.x < k) {
+            sharedMatrixA[threadIdx.y][threadIdx.x] = matrixA[row * k + t * TILE_SIZE + threadIdx.x];
+        } else {
+            sharedMatrixA[threadIdx.y][threadIdx.x] = 0;
+        }
+
+        if (col < n && t * TILE_SIZE + threadIdx.y < k) {
+            sharedMatrixB[threadIdx.y][threadIdx.x] = matrixB[(t * TILE_SIZE + threadIdx.y) * n + col];
+        } else {
+            sharedMatrixB[threadIdx.y][threadIdx.x] = 0;
+        }
+
+        __syncthreads();
+
+        for (int i = 0; i < TILE_SIZE; ++i) {
+            sum += sharedMatrixA[threadIdx.y][i] * sharedMatrixB[i][threadIdx.x];
+        }
+
+        __syncthreads();
+    }
+
+    if (row < m && col < n) {
+        matrixC[row * n + col] = sum;
+    }
+}
+
+int main() {
+    int matrixA[M][K], matrixB[K][N], matrixC[M][N];
+    int *devMatrixA, *devMatrixB, *devMatrixC;
+
+    // Initialize matrices A and B
+
+    cudaMalloc((void**)&devMatrixA, M * K * sizeof(int));
+    cudaMalloc((void**)&devMatrixB, K * N * sizeof(int));
+    cudaMalloc((void**)&devMatrixC, M * N * sizeof(int));
+
+    // Copy input matrices from host to device
+    cudaMemcpy(devMatrixA, matrixA, M * K * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(devMatrixB, matrixB, K * N * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Launch kernel
+    dim3 threadsPerBlock(TILE_SIZE, TILE_SIZE);
+    dim3 numBlocks((N + threadsPerBlock.x - 1) / threadsPerBlock.x, (M + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    matrixMultiplication<<<numBlocks, threadsPerBlock>>>(devMatrixA, devMatrixB, devMatrixC, M, N, K);
+
+    // Copy result matrix from device to host
+    cudaMemcpy(matrixC, devMatrixC, M * N * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Free device memory
+    cudaFree(devMatrixA);
+    cudaFree(devMatrixB);
+    cudaFree(devMatrixC);
+
+    // Print result matrix
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < N; ++j) {
+            printf("%d ", matrixC[i][j]);
+        }
+        printf("\n");
+    }
+
+    return 0;
+}
